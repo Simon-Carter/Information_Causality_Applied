@@ -1,7 +1,7 @@
-#Untested so far,
-
 using Statistics, Distributions
-using StatsModels, GLM
+using StatsModels, GLM, LinearAlgebra, CSV, Tables
+
+## Granger function is currently not working
 
 # Define a function for computing the Granger causality from x to y
 function grangercausality(x, y, p)
@@ -50,7 +50,7 @@ println("Granger causality from x to y: $(gc_xy[1]) (p-value: $(gc_xy[2]))")
 println("Granger causality from y to x: $(gc_yx[1]) (p-value: $(gc_yx[2]))")
 
 
-#kuramoto model (Need to add matrix A to dtheta to create a causal network)
+#kuramoto model (Need to add matrix A to dtheta to create a causal network) (Not tested or working)
 
 # Set the parameters of the Kuramoto model
 const N = 100 # Number of oscillators
@@ -81,11 +81,11 @@ for i in 2:length(t)
 end
 
 
-#VAR model
 
-using Distributions
 
-function generate_var_data(n::Int, T::Int, p::Int, β::Array{A,2}, σ²::Array{A,2}) where A <: Real
+#VAR model --------------------------------------------------------------------
+
+function generate_var_data(n::Int, T::Int, p::Int, β::Array{A,3}, σ²::Array{A,2}) where A <: Real
     # n is the number of variables
     # T is the number of time periods
     # p is the order of the VAR model
@@ -97,30 +97,114 @@ function generate_var_data(n::Int, T::Int, p::Int, β::Array{A,2}, σ²::Array{A
     e = zeros(T, n)
     
     # Generate initial values from a normal distribution
-    y[1,:] = rand(Normal(0,1), n)
+    #y[1:p,:] = rand(Normal(0,1), p, n)
+    y[1:p,:] = ones(p,n)
+
     
     # Generate VAR timeseries
-    for t in 2:T
+    for t in p+1:T
         # Construct lagged variables matrix X
-        X = zeros(1, n*p)
+        X = zeros(p, n)
         for i in 1:p
-            X[1, (i-1)*n+1:i*n] = y[t-i, :]
+            X[i,:] = y[t-i, :]
         end
         
         # Generate residuals from a multivariate normal distribution
         e[t, :] = rand(MvNormal(zeros(n), σ²), 1)
         
         # Calculate next time period's y value
-        y[t, :] = X * β + e[t, :]
+        y[t, :] = reduce(+, [(X[i,:]')*(β[:,:,i]) for i in 1:size(β,3)]) + e[t, :]'
     end
     
     return y, e
 end
 
+#convert an a higher order var model to that of order 1
+function convert_order1(C)
+    # create a sample 3D array A
+
+    # permute the dimensions of A to stack the 2D arrays vertically
+    C_permuted = permutedims(C, (1, 3, 2))
+    
+    # reshape A_permuted to a 2D array B
+    C_reshape = reshape(C_permuted, (size(C_permuted, 1)*size(C_permuted, 2), size(C_permuted, 3)))
+
+    #build the auxillary shape
+    B = zeros(size(C_reshape,1), 2*size(C_reshape,2))
+    width = 2*size(C_reshape,2)
+    B[1:width, 1:width] = I(width)
+
+    #combine the auxilary array
+    return hcat(C_reshape, B)
+
+end
+
+#convert an a higher order var model to that of order 1
+function convert_order1(C)
+    # create a sample 3D array A
+
+    # permute the dimensions of A to stack the 2D arrays vertically
+    C_permuted = permutedims(C, (1, 3, 2))
+    
+    # reshape A_permuted to a 2D array B
+    C_reshape = reshape(C_permuted, (size(C_permuted, 1)*size(C_permuted, 2), size(C_permuted, 3)))
+
+    #build the auxillary shape
+    B = zeros(size(C_reshape,1), 2*size(C_reshape,2))
+    width = 2*size(C_reshape,2)
+    B[1:width, 1:width] = I(width)
+
+    #combine the auxilary array
+    return hcat(C_reshape, B)
+
+end
+
+r= sqrt(2)
+
 # Example usage
-n = 3  # number of variables
-T = 100  # number of time periods
-p = 2  # VAR model order
-β = [0.5 0.3 -0.2; -0.1 0.7 0.1; 0.2 -0.5 0.6]  # VAR parameters
-σ² = [1.0 0.5 0.3; 0.5 1.0 0.2; 0.3 0.2 1.0]  # residuals covariance matrix
-y, e = generate_var_data(n, T, p, β, σ²)
+n = 5  # number of variables
+T = 10000  # number of time periods
+p = 3  # VAR model order
+A = zeros(n,n,p)
+σ² = Matrix{Float64}(I, n, n)  # residuals covariance matrix
+
+
+A[1,1,1] =  0.95*r;
+A[1,1,2] = -0.9025;
+A[2,1,2] =  0.5;
+A[3,1,3] = -0.4;
+A[4,1,2] = -0.5;
+A[4,4,1] =  0.25*r;
+A[4,5,1] =  0.25*r;
+A[5,4,1] = -0.25*r;
+A[5,5,1] =  0.25*r;
+
+
+#=
+A[1,3,1] = -0.6
+A[2,1,1] = -0.5
+A[2,6,1] = 0.8
+A[3,2,1] = 0.7
+A[4,4,1] = 0.7
+A[4,5,1] = 0.4
+A[5,4,1] = 0.2
+A[5,6,1] = 0.7
+A[6,6,1] = -0.5
+=#
+
+
+A = convert_order1(A)
+# Example usage
+n = 5  # number of variables
+T = 10000  # number of time periods
+p = 1  # VAR model order
+
+σ² = 0.000000001 .* I(3*n)
+σ²[1:5,1:5] = Matrix{Float64}(I, n, n)  # residuals covariance matrix
+σ² = convert(Matrix{Float64}, σ²)
+n=15
+
+
+y, e = generate_var_data(n, T, p, A, σ²)
+
+CSV.write("liangvartest.csv",  Tables.table(y), writeheader=false)
